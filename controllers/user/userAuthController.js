@@ -45,7 +45,12 @@ const loginUser = asyncHandler(async (req, res) => {
     await user.save({ validateBeforeSave: false });
     
     const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
-    const options = { httpOnly: true, secure: process.env.NODE_ENV === 'production' };
+    const options = {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+        path: '/',
+    };
     return res.status(200).cookie("accessToken", accessToken, options).cookie("refreshToken", refreshToken, options).cookie("deviceId", deviceId, options).json(new ApiResponse(200, { user: loggedInUser, accessToken }, "User logged in successfully"));
 });
 
