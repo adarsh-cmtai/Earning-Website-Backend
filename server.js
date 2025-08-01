@@ -13,8 +13,11 @@ const app = express();
 connectDB();
 
 app.use(cors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:3000' || 'https://earning-website-ashen.vercel.app',
-    credentials: true
+  origin: [
+    'http://localhost:3000',
+    'https://earning-website-ashen.vercel.app'
+  ],
+  credentials: true,
 }));
 
 app.use(express.json({ limit: '16kb' }));
