@@ -15,6 +15,7 @@ import userProfileSetupRoutes from './userProfileSetupRoutes.js';
 import userTopicRoutes from './userTopicRoutes.js';
 import { verifyJWT } from '../../middlewares/authMiddleware.js';
 import userContentRoutes from './userContentRoutes.js';
+import userBlogRoutes from './blogRoutes.js';
 
 const router = Router();
 router.route("/send-otp").post(sendOtp);
@@ -24,6 +25,7 @@ router.route("/login").post(loginUser);
 router.route("/forgot-password").post(forgotPassword);
 router.route("/reset-password").post(resetPassword);
 router.use('/public-content', userContentRoutes);
+router.use('/blog', userBlogRoutes); 
 
 router.use(verifyJWT);
 router.route("/logout").post(logoutUser);
