@@ -4,7 +4,8 @@ import {
     updateIncomeStatus,
     processBulkPayout,
     markContributionAsPaid,
-    setSuggestedContribution
+    setSuggestedContribution,
+    sendBulkDueAlerts
 } from '../../controllers/admin/financeController.js';
 import { checkRole } from '../../middlewares/roleMiddleware.js';
 
@@ -16,5 +17,6 @@ router.route('/update-status/:userId').patch(canManageFinance, updateIncomeStatu
 router.route('/bulk-payout').post(canManageFinance, processBulkPayout);
 router.route('/contribution-paid/:userId').post(canManageFinance, markContributionAsPaid);
 router.route('/set-contribution/:userId').post(canManageFinance, setSuggestedContribution);
+router.route('/send-bulk-due-alerts').post(canManageFinance, sendBulkDueAlerts);
 
 export default router;
