@@ -6,12 +6,13 @@ import { UserAssignment } from "../../models/userAssignmentModel.js";
 import { AiVideo } from "../../models/aiVideoModel.js";
 import { Announcement } from "../../models/announcementModel.js";
 import { Transaction } from "../../models/transactionModel.js";
+import { Contribution } from "../../models/contributionModel.js";
 import { format, subDays, startOfMonth } from 'date-fns';
 
 const getDashboardData = asyncHandler(async (req, res) => {
     const userId = req.user._id;
 
-    const user = await User.findById(userId).select("fullName totalEarnings currentBalance pendingPayout referralId youtubeStatus selectedTopic channelName");
+    const user = await User.findById(userId).select("fullName totalEarnings currentBalance pendingPayout referralId youtubeStatus selectedTopic channelName contributionStatus");
     const todaysDate = format(new Date(), 'yyyy-MM-dd');
     const todaysAssignmentBatch = await AssignmentBatch.findOne({ date: todaysDate });
 
@@ -38,15 +39,28 @@ const getDashboardData = asyncHandler(async (req, res) => {
     
     const startOfCurrentMonth = startOfMonth(new Date());
     const monthlyIncomeResult = await Transaction.aggregate([
-        { $match: { user: userId, type: 'Credit', createdAt: { $gte: startOfCurrentMonth } } },
+        { $match: { user: userId, type: 'Credit', category: 'YouTube', createdAt: { $gte: startOfCurrentMonth } } },
         { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
     const monthlyYoutubeIncome = monthlyIncomeResult[0]?.total || 0;
 
     const aiVideoForUpload = await AiVideo.findOne({ assignedTo: userId, status: 'Assigned' });
     const lastDownloadedVideo = await AiVideo.findOne({ assignedTo: userId, status: 'Downloaded' }).sort({ updatedAt: -1 });
-    const platformContributionPercentage = parseFloat(process.env.PLATFORM_CONTRIBUTION_PERCENTAGE || '0.1');
-    const platformContributionDue = (user.totalEarnings || 0) * platformContributionPercentage;
+
+    let platformContributionDue = 0;
+    if(user.contributionStatus !== 'Paid'){
+        const platformContributionPercentage = parseFloat(process.env.PLATFORM_CONTRIBUTION_PERCENTAGE || '0.1');
+        const paidContributions = await Contribution.aggregate([
+            { $match: { user: userId, status: 'Success' } },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+        const totalDues = (user.totalEarnings || 0) * platformContributionPercentage;
+        const totalPaid = paidContributions[0]?.total || 0;
+        platformContributionDue = Math.max(0, totalDues - totalPaid);
+    }
+
+    const directReferralsCount = await User.countDocuments({ referredBy: userId });
+
     const announcements = await Announcement.find({ isActive: true }).sort({ createdAt: -1 }).limit(3);
 
     const dashboardData = {
@@ -73,7 +87,7 @@ const getDashboardData = asyncHandler(async (req, res) => {
         },
         referral: {
             referralId: user.referralId,
-            directReferrals: 0
+            directReferrals: directReferralsCount
         },
         announcements,
     };
