@@ -28,10 +28,13 @@ const getIncomeSummary = asyncHandler(async (req, res) => {
     
     const alerts = await Alert.find({ user: userId, status: 'active' }).sort({ createdAt: -1 });
     
-    const platformContributionPercentage = parseFloat(process.env.PLATFORM_CONTRIBUTION_PERCENTAGE || '0.1');
-    const totalDues = user.totalEarnings * platformContributionPercentage;
-    const totalPaid = paidContributions[0]?.total || 0;
-    const platformContributionDue = Math.max(0, totalDues - totalPaid);
+    let platformContributionDue = 0;
+    if(user.contributionStatus !== 'Paid'){
+        const platformContributionPercentage = parseFloat(process.env.PLATFORM_CONTRIBUTION_PERCENTAGE || '0.1');
+        const totalDues = user.totalEarnings * platformContributionPercentage;
+        const totalPaid = paidContributions[0]?.total || 0;
+        platformContributionDue = Math.max(0, totalDues - totalPaid);
+    }
 
     const summary = {
         totalBalance: user.currentBalance || 0,
@@ -115,8 +118,14 @@ const verifyContributionPayment = asyncHandler(async (req, res) => {
     
     user.currentBalance -= amountPaid;
     user.contributionStatus = 'Paid';
+    user.platformContributionDue = 0;
     user.lastContributionDate = new Date();
     await user.save({ validateBeforeSave: false });
+
+    await Alert.updateMany(
+        { user: user._id, status: 'active', title: 'Monthly Contribution Due' },
+        { $set: { status: 'resolved' } }
+    );
 
     return res.status(200).json(new ApiResponse(200, {}, "Payment successful and contribution recorded."));
 });
