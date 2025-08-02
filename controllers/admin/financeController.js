@@ -1,6 +1,7 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { ApiResponse } from "../../utils/ApiResponse.js";
 import { User } from "../../models/user.model.js";
+import { Alert } from "../../models/alertModel.js";
 import { ApiError } from "../../utils/ApiError.js";
 import { logActivity } from "../../services/activityLogger.js";
 
@@ -20,7 +21,7 @@ const getUserIncomeProfiles = asyncHandler(async (req, res) => {
         query.contributionStatus = contributionStatus;
     }
 
-    const users = await User.find(query).select("email fullName totalEarnings pendingPayout contributionStatus incomeStatus platformContributionDue suggestedContributionPercentage").sort({ pendingPayout: -1 });
+    const users = await User.find(query).select("email fullName totalEarnings currentBalance pendingPayout contributionStatus incomeStatus platformContributionDue suggestedContributionPercentage").sort({ pendingPayout: -1 });
 
     return res.status(200).json(new ApiResponse(200, users, "User income profiles fetched successfully."));
 });
@@ -96,4 +97,42 @@ const setSuggestedContribution = asyncHandler(async (req, res) => {
     return res.status(200).json(new ApiResponse(200, user, "Suggested contribution percentage updated."));
 });
 
-export { getUserIncomeProfiles, updateIncomeStatus, processBulkPayout, markContributionAsPaid, setSuggestedContribution };
+const sendBulkDueAlerts = asyncHandler(async (req, res) => {
+    const usersWithPendingContribution = await User.find({
+        contributionStatus: { $in: ['Pending', 'Overdue'] },
+        currentBalance: { $gt: 0 }
+    });
+
+    if (usersWithPendingContribution.length === 0) {
+        throw new ApiError(404, "No users with pending contributions found.");
+    }
+
+    const alertPromises = usersWithPendingContribution.map(user => {
+        const amountDue = (user.currentBalance * user.suggestedContributionPercentage) / 100;
+        if (amountDue > 0) {
+            return Alert.create({
+                user: user._id,
+                type: 'warning',
+                title: 'Monthly Contribution Due',
+                description: `Your monthly platform contribution of ₹${amountDue.toFixed(2)} (${user.suggestedContributionPercentage}%) is now due. Please pay to continue using all services.`
+            });
+        }
+        return null;
+    }).filter(Boolean);
+
+    if(alertPromises.length > 0) {
+        await Promise.all(alertPromises);
+    }
+
+    await logActivity({
+        admin: req.user,
+        actionType: 'BulkContributionAlert',
+        details: `Sent contribution due alerts to ${alertPromises.length} users.`,
+        status: 'success'
+    });
+
+    return res.status(200).json(new ApiResponse(200, { count: alertPromises.length }, "Bulk due alerts sent successfully."));
+});
+
+
+export { getUserIncomeProfiles, updateIncomeStatus, processBulkPayout, markContributionAsPaid, setSuggestedContribution, sendBulkDueAlerts };
