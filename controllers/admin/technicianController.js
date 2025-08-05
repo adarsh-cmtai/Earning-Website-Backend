@@ -2,7 +2,6 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 import { ApiResponse } from "../../utils/ApiResponse.js";
 import { ApiError } from "../../utils/ApiError.js";
 import { AiVideo } from "../../models/aiVideoModel.js";
-import { AssignmentBatch } from "../../models/assignmentBatchModel.js";
 import { User } from "../../models/user.model.js";
 import { UserAssignment } from "../../models/userAssignmentModel.js";
 import { logActivity } from "../../services/activityLogger.js";
@@ -70,52 +69,6 @@ const allocateAiVideos = asyncHandler(async (req, res) => {
     return res.status(200).json(new ApiResponse(200, { allocationCount }, `${allocationCount} videos have been successfully allocated.`));
 });
 
-const getNonCompliantUsers = asyncHandler(async (req, res) => {
-  const { batchId } = req.params;
-
-  const batch = await AssignmentBatch.findById(batchId);
-  if (!batch) {
-    throw new ApiError(404, "Assignment batch not found.");
-  }
-
-  const userAssignments = await UserAssignment.find({
-    batch: batchId,
-    status: 'InProgress',
-  }).populate('user', 'email');
-
-  const nonCompliantUsers = userAssignments.map((ua) => {
-    const uniqueCompletedLinks = [...new Set(ua.completedTasks.map(task => task.link))];
-    return {
-      _id: ua.user._id,
-      email: ua.user.email,
-      tasksAssigned: ua.totalTasks,
-      tasksCompleted: uniqueCompletedLinks.length,
-    };
-  });
-
-  return res
-    .status(200)
-    .json(new ApiResponse(200, nonCompliantUsers, "Non-compliant users fetched successfully."));
-});
-
-
-
-const distributeAssignments = asyncHandler(async (req, res) => {
-    const { batchId } = req.params;
-    const batch = await AssignmentBatch.findById(batchId);
-    if (!batch) { throw new ApiError(404, "Assignment batch not found."); }
-    if (batch.status !== 'Pending') { throw new ApiError(400, "This batch has already been distributed."); }
-    const activeUsers = await User.find({ status: 'Approved', role: 'user' });
-    const userAssignmentPromises = activeUsers.map(user => {
-        return UserAssignment.updateOne({ user: user._id, date: batch.date }, { $setOnInsert: { user: user._id, batch: batch._id, date: batch.date, totalTasks: batch.links.length, completedTasks: [] } }, { upsert: true });
-    });
-    await Promise.all(userAssignmentPromises);
-    batch.status = 'In Progress';
-    await batch.save();
-    await logActivity({ admin: req.user, actionType: 'AssignmentDistributed', details: `Distributed ${batch.links.length} links to ${activeUsers.length} users for ${batch.date}`, status: 'success' });
-    return res.status(200).json(new ApiResponse(200, batch, "Assignments distributed successfully."));
-});
-
 const uploadAiVideo = asyncHandler(async (req, res) => {
     const { title, topic, type } = req.body;
     if (!req.file) { throw new ApiError(400, "Video file is required."); }
@@ -123,7 +76,7 @@ const uploadAiVideo = asyncHandler(async (req, res) => {
     const video = await AiVideo.create({ title, topic, type, fileUrl: req.file.location, fileName: req.file.key });
     await logActivity({ admin: req.user, actionType: 'AIVideoUploaded', details: `Uploaded video: ${title}`, status: 'success' });
     return res.status(201).json(new ApiResponse(201, video, "AI Video uploaded successfully."));
-}); 
+});
 
 const getAiVideos = asyncHandler(async (req, res) => {
     const videos = await AiVideo.find({}).sort({ createdAt: -1 });
@@ -140,33 +93,64 @@ const deleteAiVideo = asyncHandler(async (req, res) => {
     return res.status(200).json(new ApiResponse(200, { _id: videoId }, "Video deleted successfully."));
 });
 
-const uploadAssignmentLinks = asyncHandler(async (req, res) => {
-    const { date, links } = req.body;
-    if (!date || !links || !Array.isArray(links) || links.length === 0) { throw new ApiError(400, "Date and a non-empty array of links are required."); }
-    
-    const existingBatch = await AssignmentBatch.findOne({ date });
-    if (existingBatch) { throw new ApiError(409, `A batch for ${date} already exists.`); }
+const assignLinksToUser = asyncHandler(async (req, res) => {
+    const { userId, date, shortLinks, longLinks } = req.body;
 
-    const batch = await AssignmentBatch.create({ date, links, totalLinks: links.length });
-    await logActivity({ admin: req.user, actionType: 'AssignmentLinksUploaded', details: `Uploaded ${links.length} links for ${date}`, status: 'success' });
+    if (!userId || !date) {
+        throw new ApiError(400, "User ID and date are required.");
+    }
     
-    return res.status(201).json(new ApiResponse(201, batch, "Assignment links uploaded successfully."));
+    const formattedShortLinks = shortLinks.map((url) => ({ url, type: 'Short' }));
+    const formattedLongLinks = longLinks.map((url) => ({ url, type: 'Long' }));
+    const allLinks = [...formattedShortLinks, ...formattedLongLinks];
+
+    if (allLinks.length === 0) {
+        throw new ApiError(400, "At least one link is required for assignment.");
+    }
+    
+    const user = await User.findById(userId);
+    if (!user) {
+        throw new ApiError(404, "User not found.");
+    }
+
+    const userAssignment = await UserAssignment.findOneAndUpdate(
+        { user: userId, date: date },
+        { 
+            $set: { 
+                links: allLinks,
+                totalTasks: allLinks.length,
+                status: 'InProgress',
+                completedTasks: []
+            }
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    await logActivity({
+        admin: req.user,
+        actionType: 'UserAssignmentCreated',
+        targetUser: user.email,
+        details: `Assigned ${allLinks.length} links to ${user.email} for date ${date}.`,
+        status: 'success'
+    });
+
+    return res.status(201).json(new ApiResponse(201, userAssignment, "Assignments created for user successfully."));
 });
 
-const uploadAssignmentCsv = asyncHandler(async (req, res) => {
+const assignLinksToUserCSV = asyncHandler(async (req, res) => {
+    const { userId, date } = req.body;
     if (!req.file) { throw new ApiError(400, "CSV file is required."); }
-    const { date } = req.body;
-    if (!date) { throw new ApiError(400, "Date is required."); }
+    if (!userId || !date) { throw new ApiError(400, "User ID and date are required."); }
 
-    const existingBatch = await AssignmentBatch.findOne({ date });
-    if (existingBatch) { throw new ApiError(409, `A batch for the date ${date} already exists.`); }
+    const user = await User.findById(userId);
+    if (!user) { throw new ApiError(404, "User not found."); }
 
     const links = [];
     const readableStream = Readable.from(req.file.buffer.toString('utf8'));
 
     await new Promise((resolve, reject) => {
         readableStream
-            .pipe(csv({ headers: ['url', 'type'], skipLines: 1 }))
+            .pipe(csv({ headers: ['url', 'type'], skipLines: 0 }))
             .on('data', (row) => {
                 const type = row.type?.trim();
                 if (row.url && row.url.trim().startsWith('http') && (type === 'Short' || type === 'Long')) {
@@ -177,16 +161,46 @@ const uploadAssignmentCsv = asyncHandler(async (req, res) => {
             .on('error', reject);
     });
 
-    if (links.length === 0) { throw new ApiError(400, "No valid URLs with types found in the CSV file."); }
-    const batch = await AssignmentBatch.create({ date, links, totalLinks: links.length });
-    await logActivity({ admin: req.user, actionType: 'AssignmentCsvUploaded', details: `Uploaded ${links.length} links via CSV for ${date}`, status: 'success' });
-    return res.status(201).json(new ApiResponse(201, batch, "Assignment links from CSV uploaded successfully."));
+    if (links.length === 0) {
+        throw new ApiError(400, "No valid URLs with types found in the CSV file.");
+    }
+    
+    const userAssignment = await UserAssignment.findOneAndUpdate(
+        { user: userId, date: date },
+        {
+            $set: {
+                links: links,
+                totalTasks: links.length,
+                status: 'InProgress',
+                completedTasks: []
+            }
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    
+    await logActivity({
+        admin: req.user,
+        actionType: 'UserAssignmentCreatedCSV',
+        targetUser: user.email,
+        details: `Assigned ${links.length} links via CSV to ${user.email} for date ${date}.`,
+        status: 'success'
+    });
+
+    return res.status(201).json(new ApiResponse(201, userAssignment, "CSV assignments created for user successfully."));
 });
 
-
-const getAssignmentBatches = asyncHandler(async (req, res) => {
-    const batches = await AssignmentBatch.find({}).sort({ date: -1 });
-    return res.status(200).json(new ApiResponse(200, batches, "Assignment batches fetched."));
+const getAssignmentsForUser = asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+    const { date } = req.query;
+    
+    const query = { user: userId };
+    if (date) {
+        query.date = date;
+    }
+    
+    const assignments = await UserAssignment.find(query).sort({ date: -1 });
+    
+    return res.status(200).json(new ApiResponse(200, assignments, "User assignments fetched successfully."));
 });
 
 export { 
@@ -194,9 +208,7 @@ export {
     getAiVideos, 
     deleteAiVideo, 
     allocateAiVideos,
-    uploadAssignmentLinks, 
-    uploadAssignmentCsv,
-    getAssignmentBatches, 
-    getNonCompliantUsers, 
-    distributeAssignments 
+    assignLinksToUser,
+    assignLinksToUserCSV,
+    getAssignmentsForUser
 };
