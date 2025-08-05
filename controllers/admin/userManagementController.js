@@ -22,41 +22,21 @@ const getUserCompliance = asyncHandler(async (req, res) => {
     const recentAssignments = await UserAssignment.find({
         user: userId,
         date: { $gte: thirtyDaysAgo }
-    }).populate('batch');
+    });
 
     let dailyCompletion = 0;
     const todaysAssignment = recentAssignments.find(a => a.date === todaysDate);
 
-    if (todaysAssignment && todaysAssignment.batch && todaysAssignment.totalTasks > 0) {
-        const validLinks = new Set(todaysAssignment.batch.links.map(link => link.url));
-        const completedLinks = new Set(
-            todaysAssignment.completedTasks.map(t => t.link)
-        );
-        
-        let completedCount = 0;
-        completedLinks.forEach(link => {
-            if (validLinks.has(link)) {
-                completedCount++;
-            }
-        });
-
+    if (todaysAssignment && todaysAssignment.totalTasks > 0) {
+        const completedCount = new Set(todaysAssignment.completedTasks.map(t => t.link)).size;
         dailyCompletion = Math.round((completedCount / todaysAssignment.totalTasks) * 100);
     }
 
     let monthlyCompletion = 0;
     if (recentAssignments.length > 0) {
         const dailyRates = recentAssignments.map(ua => {
-            if (!ua.batch || ua.totalTasks === 0) return 0;
-            const validLinks = new Set(ua.batch.links.map(link => link.url));
-            const completedLinks = new Set(ua.completedTasks.map(t => t.link));
-            
-            let completedCount = 0;
-            completedLinks.forEach(link => {
-                if (validLinks.has(link)) {
-                    completedCount++;
-                }
-            });
-
+            if (ua.totalTasks === 0) return 0;
+            const completedCount = new Set(ua.completedTasks.map(t => t.link)).size;
             return completedCount / ua.totalTasks;
         });
         const averageRate = dailyRates.reduce((sum, rate) => sum + rate, 0) / dailyRates.length;
@@ -72,10 +52,12 @@ const getUserCompliance = asyncHandler(async (req, res) => {
 });
 
 const getAllUsers = asyncHandler(async (req, res) => {
-    const { search = "", status = "all" } = req.query;
+    const { search = "", status = "all", youtubeStatus = "" } = req.query;
     const query = { role: 'user' };
     if (search) { query.$or = [ { fullName: { $regex: search, $options: 'i' } }, { email: { $regex: search, $options: 'i' } }, { mobile: { $regex: search, $options: 'i' } }, { referralId: { $regex: search, $options: 'i' } } ]; }
     if (status && status !== 'all') { query.status = status; }
+    if (youtubeStatus) { query.youtubeStatus = youtubeStatus; }
+    
     const users = await User.find(query).select("-password -refreshToken").sort({ createdAt: -1 });
     return res.status(200).json(new ApiResponse(200, users, "Users fetched successfully."));
 });
@@ -212,6 +194,10 @@ const reviewManualIncome = asyncHandler(async (req, res) => {
             user.currentBalance = (user.currentBalance || 0) + submission.amount;
             user.pendingPayout = (user.pendingPayout || 0) + submission.amount;
             user.contributionStatus = "Pending";
+            
+            const platformContributionPercentage = parseFloat(process.env.PLATFORM_CONTRIBUTION_PERCENTAGE || '0.1');
+            user.platformContributionDue = user.totalEarnings * platformContributionPercentage;
+            
             await user.save({ validateBeforeSave: false });
 
             await Transaction.create({
