@@ -1,7 +1,6 @@
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { ApiResponse } from "../../utils/ApiResponse.js";
 import { User } from "../../models/user.model.js";
-import { AssignmentBatch } from "../../models/assignmentBatchModel.js";
 import { UserAssignment } from "../../models/userAssignmentModel.js";
 import { AiVideo } from "../../models/aiVideoModel.js";
 import { Announcement } from "../../models/announcementModel.js";
@@ -14,27 +13,22 @@ const getDashboardData = asyncHandler(async (req, res) => {
 
     const user = await User.findById(userId).select("fullName totalEarnings currentBalance pendingPayout referralId youtubeStatus selectedTopic channelName contributionStatus");
     const todaysDate = format(new Date(), 'yyyy-MM-dd');
-    const todaysAssignmentBatch = await AssignmentBatch.findOne({ date: todaysDate });
+    const yesterdayDate = format(subDays(new Date(), 1), 'yyyy-MM-dd');
+
+    const todaysAssignment = await UserAssignment.findOne({ user: userId, date: todaysDate });
+    const yesterdayAssignment = await UserAssignment.findOne({ user: userId, date: yesterdayDate });
 
     let assignmentsCompletedToday = 0;
     let totalAssignmentsToday = 0;
-
-    if (todaysAssignmentBatch) {
-        const userAssignment = await UserAssignment.findOne({ user: userId, date: todaysDate });
-        if (userAssignment) {
-            const uniqueCompleted = new Set(userAssignment.completedTasks.map(task => task.link));
-            assignmentsCompletedToday = uniqueCompleted.size;
-        }
-        totalAssignmentsToday = todaysAssignmentBatch.links.length;
+    if (todaysAssignment) {
+        totalAssignmentsToday = todaysAssignment.totalTasks;
+        assignmentsCompletedToday = new Set(todaysAssignment.completedTasks.map(task => task.link)).size;
     }
 
-    const yesterdayDate = format(subDays(new Date(), 1), 'yyyy-MM-dd');
-    const incompleteYesterday = await UserAssignment.findOne({ user: userId, date: yesterdayDate, status: 'InProgress' }).populate('batch');
     let pendingFromYesterday = 0;
-
-    if (incompleteYesterday) {
-        const uniqueCompletedYesterday = new Set(incompleteYesterday.completedTasks.map(task => task.link));
-        pendingFromYesterday = (incompleteYesterday.batch.links.length - uniqueCompletedYesterday.size);
+    if (yesterdayAssignment && yesterdayAssignment.status === 'InProgress') {
+        const uniqueCompletedYesterday = new Set(yesterdayAssignment.completedTasks.map(task => task.link));
+        pendingFromYesterday = yesterdayAssignment.totalTasks - uniqueCompletedYesterday.size;
     }
     
     const startOfCurrentMonth = startOfMonth(new Date());
@@ -60,7 +54,6 @@ const getDashboardData = asyncHandler(async (req, res) => {
     }
 
     const directReferralsCount = await User.countDocuments({ referredBy: userId });
-
     const announcements = await Announcement.find({ isActive: true }).sort({ createdAt: -1 }).limit(3);
 
     const dashboardData = {
