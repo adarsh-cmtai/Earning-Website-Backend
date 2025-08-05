@@ -3,11 +3,9 @@ import {
     getAiVideos, 
     uploadAiVideo, 
     deleteAiVideo,
-    getAssignmentBatches, 
-    uploadAssignmentLinks,
-    getNonCompliantUsers,
-    distributeAssignments,
-    uploadAssignmentCsv,
+    assignLinksToUser,
+    assignLinksToUserCSV,
+    getAssignmentsForUser,
     allocateAiVideos
 } from '../../controllers/admin/technicianController.js';
 import { checkRole } from '../../middlewares/roleMiddleware.js';
@@ -24,10 +22,8 @@ router.route('/ai-videos/upload').post(canManageTechnicianTasks, upload.single('
 router.route('/ai-videos/allocate').post(canManageTechnicianTasks, allocateAiVideos);
 router.route('/ai-videos/:videoId').delete(canManageTechnicianTasks, deleteAiVideo);
 
-router.route('/assignments').get(canManageTechnicianTasks, getAssignmentBatches);
-router.route('/assignments/upload').post(canManageTechnicianTasks, uploadAssignmentLinks);
-router.route('/assignments/upload-csv').post(canManageTechnicianTasks, uploadCsvToMemory.single('csvFile'), uploadAssignmentCsv);
-router.route('/assignments/:batchId/non-compliant').get(canManageTechnicianTasks, getNonCompliantUsers);
-router.route('/assignments/:batchId/distribute').post(canManageTechnicianTasks, distributeAssignments);
+router.route('/assignments/assign').post(canManageTechnicianTasks, assignLinksToUser);
+router.route('/assignments/assign-csv').post(canManageTechnicianTasks, uploadCsvToMemory.single('csvFile'), assignLinksToUserCSV);
+router.route('/assignments/:userId').get(canManageTechnicianTasks, getAssignmentsForUser);
 
 export default router;
