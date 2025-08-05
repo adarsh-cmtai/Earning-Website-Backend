@@ -1,9 +1,14 @@
 import mongoose, { Schema } from 'mongoose';
 
+const linkSchema = new Schema({
+    url: { type: String, required: true },
+    type: { type: String, enum: ['Short', 'Long'], required: true }
+}, { _id: false });
+
 const userAssignmentSchema = new Schema({
     user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-    batch: { type: Schema.Types.ObjectId, ref: 'AssignmentBatch', required: true },
     date: { type: String, required: true },
+    links: [linkSchema],
     completedTasks: [{
         link: String,
         completedAt: { type: Date, default: Date.now }
